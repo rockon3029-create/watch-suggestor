@@ -21,14 +21,35 @@ jobs:
 
       - name: Compile and Package APK
         run: |
-          mkdir -p build/gen build/obj
-          aapt package -f -m -J build/gen -M AndroidManifest.xml -S res -I $ANDROID_HOME/platforms/android-33/android.jar
-          javac -cp $ANDROID_HOME/platforms/android-33/android.jar -d build/obj $(find src build/gen -name "*.java")
-          d8 --output build/ $(find build/obj -name "*.class")
-          aapt package -f -M AndroidManifest.xml -S res -A assets -I $ANDROID_HOME/platforms/android-33/android.jar -F build/unsigned.apk
-          cd build && aapt add unsigned.apk classes.dex && cd ..
+          # 1. Ensure all expected folders exist
+          mkdir -p res/values assets build/gen build/obj
+
+          # 2. Locate Android build-tools (aapt, d8, apksigner)
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          PLATFORM_JAR="$ANDROID_HOME/platforms/android-33/android.jar"
+          if [ ! -f "$PLATFORM_JAR" ]; then
+            PLATFORM_JAR=$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -n 1)
+          fi
+
+          echo "Using Build Tools: $BUILD_TOOLS_DIR"
+          echo "Using Platform JAR: $PLATFORM_JAR"
+
+          # 3. Generate R.java
+          $BUILD_TOOLS_DIR/aapt package -f -m -J build/gen -M AndroidManifest.xml -S res -I "$PLATFORM_JAR"
+
+          # 4. Compile Java source code
+          javac -cp "$PLATFORM_JAR" -d build/obj $(find src build/gen -name "*.java")
+
+          # 5. Convert compiled classes to Dalvik executable (classes.dex)
+          $BUILD_TOOLS_DIR/d8 --output build/ $(find build/obj -name "*.class")
+
+          # 6. Package resources and assets into unsigned APK
+          $BUILD_TOOLS_DIR/aapt package -f -M AndroidManifest.xml -S res -A assets -I "$PLATFORM_JAR" -F build/unsigned.apk
+          cd build && $BUILD_TOOLS_DIR/aapt add unsigned.apk classes.dex && cd ..
+
+          # 7. Generate debug keystore and sign APK
           keytool -genkeypair -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Debug,O=App,C=US"
-          apksigner sign --ks debug.keystore --ks-pass pass:android --out WatchSuggester.apk build/unsigned.apk
+          $BUILD_TOOLS_DIR/apksigner sign --ks debug.keystore --ks-pass pass:android --out WatchSuggester.apk build/unsigned.apk
 
       - name: Upload Finished APK
         uses: actions/upload-artifact@v4
