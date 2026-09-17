@@ -1,0 +1,10 @@
+[
+  {"title": "Stranger Things", "platform": "Netflix", "genre": "Sci-Fi"},
+  {"title": "Breaking Bad", "platform": "Netflix", "genre": "Crime"},
+  {"title": "The Boys", "platform": "Prime Video", "genre": "Action"},
+  {"title": "Mirzapur", "platform": "Prime Video", "genre": "Drama"},
+  {"title": "Special OPS", "platform": "Hotstar", "genre": "Thriller"},
+  {"title": "Loki", "platform": "Hotstar", "genre": "Superhero"},
+  {"title": "Veritasium", "platform": "YouTube", "genre": "Science"},
+  {"title": "Kurzgesagt", "platform": "YouTube", "genre": "Documentary"}
+]
