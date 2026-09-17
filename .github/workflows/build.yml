@@ -16,20 +16,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Compile and Package APK
         run: |
-          # 1. Ensure all expected folders exist
+          # 1. Ensure required directories exist
           mkdir -p res/values assets build/gen build/obj
 
-          # 2. Locate Android build-tools (aapt, d8, apksigner)
+          # 2. Use the pre-installed Android SDK on GitHub runners
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
-          PLATFORM_JAR="$ANDROID_HOME/platforms/android-33/android.jar"
-          if [ ! -f "$PLATFORM_JAR" ]; then
-            PLATFORM_JAR=$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -n 1)
-          fi
+          PLATFORM_JAR=$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -n 1)
 
           echo "Using Build Tools: $BUILD_TOOLS_DIR"
           echo "Using Platform JAR: $PLATFORM_JAR"
@@ -40,14 +35,14 @@ jobs:
           # 4. Compile Java source code
           javac -cp "$PLATFORM_JAR" -d build/obj $(find src build/gen -name "*.java")
 
-          # 5. Convert compiled classes to Dalvik executable (classes.dex)
+          # 5. Convert bytecode to Dalvik executable (classes.dex)
           $BUILD_TOOLS_DIR/d8 --output build/ $(find build/obj -name "*.class")
 
           # 6. Package resources and assets into unsigned APK
           $BUILD_TOOLS_DIR/aapt package -f -M AndroidManifest.xml -S res -A assets -I "$PLATFORM_JAR" -F build/unsigned.apk
           cd build && $BUILD_TOOLS_DIR/aapt add unsigned.apk classes.dex && cd ..
 
-          # 7. Generate debug keystore and sign APK
+          # 7. Generate debug key and sign APK
           keytool -genkeypair -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Debug,O=App,C=US"
           $BUILD_TOOLS_DIR/apksigner sign --ks debug.keystore --ks-pass pass:android --out WatchSuggester.apk build/unsigned.apk
 
