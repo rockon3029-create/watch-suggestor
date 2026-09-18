@@ -1,18 +1,19 @@
 package com.example.watchsuggester;
 
 import android.app.Activity;
+import android.app.AppOpsManager;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
+import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Process;
 import android.provider.Settings;
-import android.util.JsonReader;
 import android.widget.*;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class MainActivity extends Activity {
+
     static class MediaItem {
         String title, platform, genre;
         MediaItem(String t, String p, String g) {
@@ -26,75 +27,66 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Fallback default titles so app never crashes if file read fails
-        seedFallbackCatalog();
-
-        // Attempt loading external JSON safely
-        try {
-            loadCatalogFromAssets("catalog.json");
-        } catch (Throwable ignored) {}
+        seedCatalog();
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(40, 40, 40, 40);
+        root.setPadding(40, 60, 40, 40);
 
         Button btnPerm = new Button(this);
-        btnPerm.setText("1. Enable Notification Access");
-        btnPerm.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
-            } catch (Exception e) {
-                Toast.makeText(this, "Open Notification settings manually", Toast.LENGTH_SHORT).show();
-            }
-        });
+        btnPerm.setText("1. Grant Usage Access (Screen Time)");
+        btnPerm.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)));
         root.addView(btnPerm);
 
-        TextView lbl = new TextView(this);
-        lbl.setText("\nFilter by Platform (" + catalog.size() + " items available):");
-        root.addView(lbl);
+        Button btnRefresh = new Button(this);
+        btnRefresh.setText("2. Check Screen Time & Suggest");
+        root.addView(btnRefresh);
 
-        Spinner platformSpinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"All", "Netflix", "Prime Video", "Hotstar", "YouTube"});
-        platformSpinner.setAdapter(adapter);
-        root.addView(platformSpinner);
-
-        Button btnSuggest = new Button(this);
-        btnSuggest.setText("Suggest What to Watch Next");
-        root.addView(btnSuggest);
+        TextView tvUsage = new TextView(this);
+        tvUsage.setTextSize(14);
+        tvUsage.setPadding(0, 30, 0, 20);
+        root.addView(tvUsage);
 
         TextView tvResult = new TextView(this);
         tvResult.setTextSize(18);
-        tvResult.setPadding(0, 30, 0, 20);
         root.addView(tvResult);
 
-        TextView tvHistory = new TextView(this);
-        tvHistory.setTextSize(14);
-        root.addView(tvHistory);
+        btnRefresh.setOnClickListener(v -> {
+            if (!hasUsageStatsPermission()) {
+                tvUsage.setText("Usage access permission is NOT granted.\nTap the top button first.");
+                return;
+            }
 
-        btnSuggest.setOnClickListener(v -> {
-            String selectedPlatform = platformSpinner.getSelectedItem().toString();
-            List<MediaItem> pool = new ArrayList<>();
+            Map<String, Long> timeMap = getAppScreenTime();
+            StringBuilder sb = new StringBuilder("Today's App Usage:\n");
+            String topApp = "None";
+            long maxTime = 0;
 
+            for (Map.Entry<String, Long> entry : timeMap.entrySet()) {
+                long minutes = entry.getValue() / (1000 * 60);
+                sb.append("• ").append(entry.getKey()).append(": ").append(minutes).append(" mins\n");
+                if (entry.getValue() > maxTime) {
+                    maxTime = entry.getValue();
+                    topApp = entry.getKey();
+                }
+            }
+            tvUsage.setText(sb.toString());
+
+            // Suggest based on the app used the most today
+            List<MediaItem> matches = new ArrayList<>();
             for (MediaItem item : catalog) {
-                if (selectedPlatform.equals("All") || item.platform.equalsIgnoreCase(selectedPlatform)) {
-                    pool.add(item);
+                if (item.platform.equalsIgnoreCase(topApp)) {
+                    matches.add(item);
                 }
             }
 
-            if (!pool.isEmpty()) {
-                MediaItem pick = pool.get(new Random().nextInt(pool.size()));
-                tvResult.setText("Recommended: " + pick.title + "\n[" + pick.platform + " | " + pick.genre + "]");
+            if (!matches.isEmpty()) {
+                MediaItem pick = matches.get(new Random().nextInt(matches.size()));
+                tvResult.setText("Based on your most-used app (" + topApp + "):\nRecommended: " + pick.title + " [" + pick.genre + "]");
             } else {
-                tvResult.setText("No titles found for " + selectedPlatform);
+                MediaItem fallback = catalog.get(new Random().nextInt(catalog.size()));
+                tvResult.setText("General Recommendation:\n" + fallback.title + " [" + fallback.platform + " | " + fallback.genre + "]");
             }
-
-            try {
-                SharedPreferences prefs = getSharedPreferences("MediaHistory", MODE_PRIVATE);
-                String history = prefs.getString("recent_items", "No recent activity detected yet.");
-                tvHistory.setText("Recent Detected Activity:\n" + history);
-            } catch (Exception ignored) {}
         });
 
         ScrollView scroll = new ScrollView(this);
@@ -102,7 +94,47 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
-    private void seedFallbackCatalog() {
+    private boolean hasUsageStatsPermission() {
+        AppOpsManager appOps = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+        int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private Map<String, Long> getAppScreenTime() {
+        Map<String, Long> results = new HashMap<>();
+        results.put("YouTube", 0L);
+        results.put("Netflix", 0L);
+        results.put("Prime Video", 0L);
+        results.put("Hotstar", 0L);
+
+        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+        Calendar calendar = Calendar.getInstance();
+        calendar.set(Calendar.HOUR_OF_DAY, 0);
+        calendar.set(Calendar.MINUTE, 0);
+        calendar.set(Calendar.SECOND, 0);
+        long startTime = calendar.getTimeInMillis();
+        long endTime = System.currentTimeMillis();
+
+        List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
+        if (stats != null) {
+            for (UsageStats u : stats) {
+                String pkg = u.getPackageName().toLowerCase();
+                long total = u.getTotalTimeInForeground();
+                if (pkg.contains("youtube")) {
+                    results.put("YouTube", results.get("YouTube") + total);
+                } else if (pkg.contains("netflix")) {
+                    results.put("Netflix", results.get("Netflix") + total);
+                } else if (pkg.contains("amazon.avod")) {
+                    results.put("Prime Video", results.get("Prime Video") + total);
+                } else if (pkg.contains("hotstar")) {
+                    results.put("Hotstar", results.get("Hotstar") + total);
+                }
+            }
+        }
+        return results;
+    }
+
+    private void seedCatalog() {
         catalog.add(new MediaItem("Stranger Things", "Netflix", "Sci-Fi"));
         catalog.add(new MediaItem("Breaking Bad", "Netflix", "Crime"));
         catalog.add(new MediaItem("The Boys", "Prime Video", "Action"));
@@ -111,34 +143,5 @@ public class MainActivity extends Activity {
         catalog.add(new MediaItem("Loki", "Hotstar", "Superhero"));
         catalog.add(new MediaItem("Veritasium", "YouTube", "Science"));
         catalog.add(new MediaItem("Kurzgesagt", "YouTube", "Documentary"));
-    }
-
-    private void loadCatalogFromAssets(String fileName) {
-        try (InputStream is = getAssets().open(fileName);
-             InputStreamReader isr = new InputStreamReader(is, StandardCharsets.UTF_8);
-             JsonReader reader = new JsonReader(isr)) {
-
-            List<MediaItem> fileCatalog = new ArrayList<>();
-            reader.beginArray();
-            while (reader.hasNext()) {
-                reader.beginObject();
-                String title = "", platform = "", genre = "";
-                while (reader.hasNext()) {
-                    String key = reader.nextName();
-                    if (key.equals("title")) title = reader.nextString();
-                    else if (key.equals("platform")) platform = reader.nextString();
-                    else if (key.equals("genre")) genre = reader.nextString();
-                    else reader.skipValue();
-                }
-                reader.endObject();
-                if (!title.isEmpty()) fileCatalog.add(new MediaItem(title, platform, genre));
-            }
-            reader.endArray();
-
-            if (!fileCatalog.isEmpty()) {
-                catalog.clear();
-                catalog.addAll(fileCatalog);
-            }
-        } catch (Exception ignored) {}
     }
 }
