@@ -1,13 +1,9 @@
 package com.example.watchsuggester;
 
 import android.app.Activity;
-import android.app.AppOpsManager;
-import android.app.usage.UsageStats;
-import android.app.usage.UsageStatsManager;
-import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
-import android.os.Process;
 import android.provider.Settings;
 import android.widget.*;
 import java.util.*;
@@ -21,71 +17,76 @@ public class MainActivity extends Activity {
         }
     }
 
-    private List<MediaItem> catalog = new ArrayList<>();
+    private final List<MediaItem> catalog = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         seedCatalog();
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(40, 60, 40, 40);
+        root.setPadding(40, 50, 40, 40);
 
-        Button btnPerm = new Button(this);
-        btnPerm.setText("1. Grant Usage Access (Screen Time)");
-        btnPerm.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)));
-        root.addView(btnPerm);
+        Button btnAccess = new Button(this);
+        btnAccess.setText("1. Enable Accessibility Reader");
+        btnAccess.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        root.addView(btnAccess);
 
-        Button btnRefresh = new Button(this);
-        btnRefresh.setText("2. Check Screen Time & Suggest");
-        root.addView(btnRefresh);
+        TextView tvInstructions = new TextView(this);
+        tvInstructions.setText("Turn on 'WatchSuggester Screen Reader' inside Accessibility settings.\n");
+        root.addView(tvInstructions);
 
-        TextView tvUsage = new TextView(this);
-        tvUsage.setTextSize(14);
-        tvUsage.setPadding(0, 30, 0, 20);
-        root.addView(tvUsage);
+        Button btnAnalyze = new Button(this);
+        btnAnalyze.setText("2. Analyze Watched Content & Suggest Next");
+        root.addView(btnAnalyze);
 
-        TextView tvResult = new TextView(this);
-        tvResult.setTextSize(18);
-        root.addView(tvResult);
+        TextView tvProfile = new TextView(this);
+        tvProfile.setTextSize(14);
+        tvProfile.setPadding(0, 20, 0, 20);
+        root.addView(tvProfile);
 
-        btnRefresh.setOnClickListener(v -> {
-            if (!hasUsageStatsPermission()) {
-                tvUsage.setText("Usage access permission is NOT granted.\nTap the top button first.");
+        TextView tvSuggestion = new TextView(this);
+        tvSuggestion.setTextSize(18);
+        root.addView(tvSuggestion);
+
+        btnAnalyze.setOnClickListener(v -> {
+            SharedPreferences prefs = getSharedPreferences("WatchProfile", MODE_PRIVATE);
+            String rawHistory = prefs.getString("titles_seen", "");
+
+            if (rawHistory.trim().isEmpty()) {
+                tvProfile.setText("No watched content detected yet.\nOpen YouTube, Netflix, Hotstar, or Prime Video and watch something first!");
+                tvSuggestion.setText("");
                 return;
             }
 
-            Map<String, Long> timeMap = getAppScreenTime();
-            StringBuilder sb = new StringBuilder("Today's App Usage:\n");
-            String topApp = "None";
-            long maxTime = 0;
-
-            for (Map.Entry<String, Long> entry : timeMap.entrySet()) {
-                long minutes = entry.getValue() / (1000 * 60);
-                sb.append("• ").append(entry.getKey()).append(": ").append(minutes).append(" mins\n");
-                if (entry.getValue() > maxTime) {
-                    maxTime = entry.getValue();
-                    topApp = entry.getKey();
+            // Keyword inference engine
+            Map<String, Integer> genreWeights = computeGenreInterests(rawHistory);
+            String topGenre = "Action";
+            int maxScore = -1;
+            for (Map.Entry<String, Integer> e : genreWeights.entrySet()) {
+                if (e.getValue() > maxScore) {
+                    maxScore = e.getValue();
+                    topGenre = e.getKey();
                 }
             }
-            tvUsage.setText(sb.toString());
 
-            // Suggest based on the app used the most today
+            tvProfile.setText("Detected Recent Titles:\n" + rawHistory + "\nInferred Preferred Genre: " + topGenre);
+
+            // Filter catalog matching inferred taste
             List<MediaItem> matches = new ArrayList<>();
             for (MediaItem item : catalog) {
-                if (item.platform.equalsIgnoreCase(topApp)) {
+                if (item.genre.equalsIgnoreCase(topGenre)) {
                     matches.add(item);
                 }
             }
 
             if (!matches.isEmpty()) {
                 MediaItem pick = matches.get(new Random().nextInt(matches.size()));
-                tvResult.setText("Based on your most-used app (" + topApp + "):\nRecommended: " + pick.title + " [" + pick.genre + "]");
+                tvSuggestion.setText("Recommended Next:\n" + pick.title + "\nAvailable on: " + pick.platform + " [" + pick.genre + "]");
             } else {
                 MediaItem fallback = catalog.get(new Random().nextInt(catalog.size()));
-                tvResult.setText("General Recommendation:\n" + fallback.title + " [" + fallback.platform + " | " + fallback.genre + "]");
+                tvSuggestion.setText("Recommended Next:\n" + fallback.title + "\nAvailable on: " + fallback.platform + " [" + fallback.genre + "]");
             }
         });
 
@@ -94,54 +95,43 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
-    private boolean hasUsageStatsPermission() {
-        AppOpsManager appOps = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
-        int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
-        return mode == AppOpsManager.MODE_ALLOWED;
-    }
+    private Map<String, Integer> computeGenreInterests(String history) {
+        String lower = history.toLowerCase();
+        Map<String, Integer> scores = new HashMap<>();
+        scores.put("Crime", 0);
+        scores.put("Sci-Fi", 0);
+        scores.put("Action", 0);
+        scores.put("Documentary", 0);
+        scores.put("Comedy", 0);
 
-    private Map<String, Long> getAppScreenTime() {
-        Map<String, Long> results = new HashMap<>();
-        results.put("YouTube", 0L);
-        results.put("Netflix", 0L);
-        results.put("Prime Video", 0L);
-        results.put("Hotstar", 0L);
-
-        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
-        Calendar calendar = Calendar.getInstance();
-        calendar.set(Calendar.HOUR_OF_DAY, 0);
-        calendar.set(Calendar.MINUTE, 0);
-        calendar.set(Calendar.SECOND, 0);
-        long startTime = calendar.getTimeInMillis();
-        long endTime = System.currentTimeMillis();
-
-        List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
-        if (stats != null) {
-            for (UsageStats u : stats) {
-                String pkg = u.getPackageName().toLowerCase();
-                long total = u.getTotalTimeInForeground();
-                if (pkg.contains("youtube")) {
-                    results.put("YouTube", results.get("YouTube") + total);
-                } else if (pkg.contains("netflix")) {
-                    results.put("Netflix", results.get("Netflix") + total);
-                } else if (pkg.contains("amazon.avod")) {
-                    results.put("Prime Video", results.get("Prime Video") + total);
-                } else if (pkg.contains("hotstar")) {
-                    results.put("Hotstar", results.get("Hotstar") + total);
-                }
-            }
+        if (lower.contains("police") || lower.contains("gang") || lower.contains("crime") || lower.contains("murder") || lower.contains("mirzapur") || lower.contains("bad")) {
+            scores.put("Crime", scores.get("Crime") + 3);
         }
-        return results;
+        if (lower.contains("space") || lower.contains("tech") || lower.contains("future") || lower.contains("alien") || lower.contains("stranger")) {
+            scores.put("Sci-Fi", scores.get("Sci-Fi") + 3);
+        }
+        if (lower.contains("fight") || lower.contains("super") || lower.contains("war") || lower.contains("boys") || lower.contains("action")) {
+            scores.put("Action", scores.get("Action") + 3);
+        }
+        if (lower.contains("how") || lower.contains("why") || lower.contains("science") || lower.contains("history") || lower.contains("veritasium") || lower.contains("kurzgesagt")) {
+            scores.put("Documentary", scores.get("Documentary") + 3);
+        }
+
+        return scores;
     }
 
     private void seedCatalog() {
         catalog.add(new MediaItem("Stranger Things", "Netflix", "Sci-Fi"));
+        catalog.add(new MediaItem("Dark", "Netflix", "Sci-Fi"));
         catalog.add(new MediaItem("Breaking Bad", "Netflix", "Crime"));
+        catalog.add(new MediaItem("Narcos", "Netflix", "Crime"));
         catalog.add(new MediaItem("The Boys", "Prime Video", "Action"));
-        catalog.add(new MediaItem("Mirzapur", "Prime Video", "Drama"));
-        catalog.add(new MediaItem("Special OPS", "Hotstar", "Thriller"));
-        catalog.add(new MediaItem("Loki", "Hotstar", "Superhero"));
-        catalog.add(new MediaItem("Veritasium", "YouTube", "Science"));
-        catalog.add(new MediaItem("Kurzgesagt", "YouTube", "Documentary"));
+        catalog.add(new MediaItem("Reacher", "Prime Video", "Action"));
+        catalog.add(new MediaItem("Mirzapur", "Prime Video", "Crime"));
+        catalog.add(new MediaItem("Panchayat", "Prime Video", "Comedy"));
+        catalog.add(new MediaItem("Special OPS", "Hotstar", "Crime"));
+        catalog.add(new MediaItem("Loki", "Hotstar", "Sci-Fi"));
+        catalog.add(new MediaItem("Veritasium", "YouTube", "Documentary"));
+        catalog.add(new MediaItem("Kurzgesagt - In a Nutshell", "YouTube", "Documentary"));
     }
 }
