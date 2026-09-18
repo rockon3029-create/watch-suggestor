@@ -1,17 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.watchsuggester"
-    android:versionCode="4"
-    android:versionName="1.3">
+    android:versionCode="5"
+    android:versionName="1.4">
 
     <uses-sdk 
         android:minSdkVersion="26" 
         android:targetSdkVersion="33" />
-
-    <!-- Allows checking app usage and screen time -->
-    <uses-permission 
-        xmlns:tools="http://schemas.android.com/tools"
-        android:name="android.permission.PACKAGE_USAGE_STATS" 
-        tools:ignore="ProtectedPermissions" />
 
     <application 
         android:label="WatchSuggester" 
@@ -26,6 +20,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service 
+            android:name=".ContentScannerService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:label="WatchSuggester Screen Reader"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+        </service>
 
     </application>
 </manifest>
